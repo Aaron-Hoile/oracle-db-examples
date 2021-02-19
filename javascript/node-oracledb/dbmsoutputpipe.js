@@ -1,4 +1,4 @@
-/* Copyright (c) 2015, 2017, Oracle and/or its affiliates. All rights reserved. */
+/* Copyright (c) 2015, 2019, Oracle and/or its affiliates. All rights reserved. */
 
 /******************************************************************************
  *
@@ -20,117 +20,79 @@
  *
  * DESCRIPTION
  *   Displays PL/SQL DBMS_OUTPUT using a pipelined table.
- *   Use demo.sql to create the dependencies or do:
  *
- *   CREATE OR REPLACE TYPE dorow AS TABLE OF VARCHAR2(32767);
- *   /
- *   SHOW ERRORS
- *
- *   CREATE OR REPLACE FUNCTION mydofetch RETURN dorow PIPELINED IS
- *   line VARCHAR2(32767);
- *   status INTEGER;
- *   BEGIN LOOP
- *     DBMS_OUTPUT.GET_LINE(line, status);
- *     EXIT WHEN status = 1;
- *     PIPE ROW (line);
- *   END LOOP;
- *   END;
- *   /
- *   SHOW ERRORS
+ *   This example uses Node 8's async/await syntax.
  *
  *****************************************************************************/
 
-var async = require('async');
-var oracledb = require('oracledb');
-var dbConfig = require('./dbconfig.js');
+const oracledb = require('oracledb');
+const dbConfig = require('./dbconfig.js');
 
-var numRows = 100;  // fetch this many records at a time
+async function run() {
 
-oracledb.createPool(
-  {
-    user          : dbConfig.user,
-    password      : dbConfig.password,
-    connectString : dbConfig.connectString
-  },
-  function(err, pool) {
-    if (err)
-      console.error(err.message);
-    else
-      doit(pool);
-  });
+  let connection;
 
-var doit = function(pool) {
-  async.waterfall(
-    [
-      function(cb) {
-        pool.getConnection(cb);
-      },
-      enableDbmsOutput,
-      createDbmsOutput,
-      fetchDbmsOutput,
-      printDbmsOutput,
-      closeRS
-    ],
-    function (err, conn) {
-      if (err) { console.error("In waterfall error cb: ==>", err, "<=="); }
-      conn.close(function (err) { if (err) console.error(err.message); });
-    });
-};
+  try {
+    connection = await oracledb.getConnection(dbConfig);
 
-var enableDbmsOutput = function (conn, cb) {
-  conn.execute(
-    "BEGIN DBMS_OUTPUT.ENABLE(NULL); END;",
-    function(err) { return cb(err, conn); });
-};
+    //
+    // Setup
+    //
 
-var createDbmsOutput = function (conn, cb) {
-  conn.execute(
-    `BEGIN
-       DBMS_OUTPUT.PUT_LINE('Hello, Oracle!');
-       DBMS_OUTPUT.PUT_LINE('Hello, Node!');
-     END;`,
-    function(err) { return cb(err, conn); });
-};
+    const stmts = [
+      `CREATE OR REPLACE TYPE no_dorow AS TABLE OF VARCHAR2(32767)`,
 
-var fetchDbmsOutput = function (conn, cb) {
-  conn.execute(
-    "SELECT * FROM TABLE(mydofetch())",
-    [],
-    { resultSet: true },
-    function (err, result) {
-      if (err)
-        return cb(err, conn);
-      else
-        return cb(null, conn, result);
-    });
-};
+      `CREATE OR REPLACE FUNCTION no_dofetch RETURN no_dorow PIPELINED IS
+      line VARCHAR2(32767);
+      status INTEGER;
+      BEGIN LOOP
+        DBMS_OUTPUT.GET_LINE(line, status);
+        EXIT WHEN status = 1;
+        PIPE ROW (line);
+      END LOOP;
+      END;`
 
-var printDbmsOutput = function(conn, result, cb) {
-  if (result.resultSet) {
-    return fetchRowsFromRS(conn, result.resultSet, numRows, cb);
-  } else {
-    console.log("No results");
-    return cb(null, conn);
-  }
-};
+    ];
 
-var fetchRowsFromRS = function(conn, resultSet, numRows, cb) {
-  resultSet.getRows(
-    numRows,
-    function (err, rows) {
-      if (err) {
-        return cb(err, conn, resultSet);
-      } else if (rows.length > 0) {
-        console.log(rows);
-        return fetchRowsFromRS(conn, resultSet, numRows, cb);
-      } else {
-        return cb(null, conn, resultSet);
+    for (const s of stmts) {
+      try {
+        await connection.execute(s);
+      } catch(e) {
+        if (e.errorNum != 942)
+          console.error(e);
       }
-    });
-};
+    }
 
-var closeRS = function(conn, resultSet, cb) {
-  resultSet.close(function(err) {
-    return cb(err, conn);
-  });
-};
+    //
+    // Show DBMS_OUTPUT
+    //
+
+    await connection.execute(
+      `BEGIN
+         DBMS_OUTPUT.ENABLE(NULL);
+       END;`);
+
+    await connection.execute(
+      `BEGIN
+         DBMS_OUTPUT.PUT_LINE('Hello, Oracle!');
+         DBMS_OUTPUT.PUT_LINE('Hello, Node!');
+       END;`);
+
+    const result = await connection.execute(
+      `SELECT * FROM TABLE(no_dofetch())`);
+    console.log(result.rows);
+
+  } catch (err) {
+    console.error(err);
+  } finally {
+    if (connection) {
+      try {
+        await connection.close();
+      } catch (err) {
+        console.error(err);
+      }
+    }
+  }
+}
+
+run();

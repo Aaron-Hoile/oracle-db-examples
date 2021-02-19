@@ -1,4 +1,4 @@
-/* Copyright (c) 2016, 2019, Oracle and/or its affiliates. All rights reserved. */
+/* Copyright (c) 2016, 2020, Oracle and/or its affiliates. All rights reserved. */
 
 /******************************************************************************
  *
@@ -20,63 +20,81 @@
  *
  * DESCRIPTION
  *   Executes a basic query using a Readable Stream.
- *   Uses Oracle's sample HR schema.
- *
- *   Scripts to create the HR schema can be found at:
- *   https://github.com/oracle/db-sample-schemas
  *
  *   This example requires node-oracledb 1.8 or later.
  *
+ *   This example uses Node 8's async/await syntax.
+ *
  *****************************************************************************/
 
-var oracledb = require('oracledb');
-var dbConfig = require('./dbconfig.js');
+const oracledb = require('oracledb');
+const dbConfig = require('./dbconfig.js');
+const demoSetup = require('./demosetup.js');
 
-var rowcount = 0;
+async function run() {
+  let connection;
 
-oracledb.getConnection(
-  {
-    user          : dbConfig.user,
-    password      : dbConfig.password,
-    connectString : dbConfig.connectString
-  },
-  function(err, connection) {
-    if (err) {
-      console.error(err.message);
-      return;
-    }
+  try {
+    connection = await oracledb.getConnection(dbConfig);
 
-    var stream = connection.queryStream(
-      'SELECT first_name, last_name FROM employees ORDER BY employee_id',
+    await demoSetup.setupBf(connection);  // create the demo table
+
+    const stream = await connection.queryStream(
+      `SELECT farmer, weight
+       FROM no_banana_farmer
+       ORDER BY id`,
       [],  // no binds
-      { fetchArraySize: 150 }  // internal buffer size for performance tuning
+      {
+        prefetchRows:   150,  // internal buffer sizes can be adjusted for performance tuning
+        fetchArraySize: 150
+      }
     );
 
-    stream.on('error', function (error) {
-      // console.log("stream 'error' event");
-      console.error(error);
-      return;
+    const consumeStream = new Promise((resolve, reject) => {
+      let rowcount = 0;
+
+      stream.on('error', function(error) {
+        // console.log("stream 'error' event");
+        reject(error);
+      });
+
+      stream.on('metadata', function(metadata) {
+        // console.log("stream 'metadata' event");
+        console.log(metadata);
+      });
+
+      stream.on('data', function(data) {
+        // console.log("stream 'data' event");
+        console.log(data);
+        rowcount++;
+      });
+
+      stream.on('end', function() {
+        // console.log("stream 'end' event"); // all data has been fetched
+        stream.destroy();                     // clean up resources being used
+      });
+
+      stream.on('close', function() {
+        // console.log("stream 'close' event");
+        // The underlying ResultSet has been closed, so the connection can now
+        // be closed, if desired.  Note: do not close connections on 'end'.
+        resolve(rowcount);
+      });
     });
 
-    stream.on('metadata', function (metadata) {
-      // console.log("stream 'metadata' event");
-      console.log(metadata);
-    });
+    const numrows = await consumeStream;
+    console.log('Rows selected: ' + numrows);
+  } catch (err) {
+    console.error(err);
+  } finally {
+    if (connection) {
+      try {
+        await connection.close();
+      } catch (err) {
+        console.error(err);
+      }
+    }
+  }
+}
 
-    stream.on('data', function (data) {
-      // console.log("stream 'data' event");
-      console.log(data);
-      rowcount++;
-    });
-
-    stream.on('end', function () {
-      // console.log("stream 'end' event");
-      console.log('Rows selected: ' + rowcount);
-      connection.close(
-        function(err) {
-          if (err) {
-            console.error(err.message);
-          }
-        });
-    });
-  });
+run();

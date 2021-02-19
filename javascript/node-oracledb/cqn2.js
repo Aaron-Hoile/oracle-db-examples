@@ -26,18 +26,23 @@
  *   The user must have been granted CHANGE NOTIFICATION.
  *   The node-oracledb host must be resolvable by the database host.
  *
- *   This example uses Node 8 syntax, but could be written to use callbacks.
+ *   Run this script and when the subscription has been created, run
+ *   these statements in a SQL*Plus session:
+ *      INSERT INTO NO_CQNTABLE VALUES (1);
+ *      COMMIT;
  *
  *   This example requires node-oracledb 2.3 or later.
+ *
+ *   This example uses Node 8's async/await syntax.
  *
  *****************************************************************************/
 
 const oracledb = require("oracledb");
-let dbConfig = require('./dbconfig.js');
+const dbConfig = require('./dbconfig.js');
 
 dbConfig.events = true;  // CQN needs events mode
 
-let interval = setInterval(function() {
+const interval = setInterval(function() {
   console.log("waiting...");
 }, 5000);
 
@@ -53,14 +58,14 @@ function myCallback(message)
   console.log("Message database name:", message.dbName);
   console.log("Message transaction id:", message.txId);
   for (let i = 0; i < message.tables.length; i++) {
-    let table = message.tables[i];
+    const table = message.tables[i];
     console.log("--> Table Name:", table.name);
     // Note table.operation and row.operation are masks of
     // oracledb.CQN_OPCODE_* values
     console.log("--> Table Operation:", table.operation);
     if (table.rows) {
       for (let j = 0; j < table.rows.length; j++) {
-        let row = table.rows[j];
+        const row = table.rows[j];
         console.log("--> --> Row Rowid:", row.rowid);
         console.log("--> --> Row Operation:", row.operation);
         console.log(Array(61).join("-"));
@@ -72,7 +77,8 @@ function myCallback(message)
 
 const options = {
   callback : myCallback,
-  sql: "SELECT * FROM cqntable",
+  sql: "SELECT * FROM no_cqntable",
+  // ipAddress: '127.0.0.1',
   // Stop after 60 seconds
   timeout : 60,
   // Return ROWIDs in the notification message
@@ -84,13 +90,32 @@ const options = {
   groupingType  : oracledb.SUBSCR_GROUPING_TYPE_SUMMARY
 };
 
+async function setup(connection) {
+  const stmts = [
+    `DROP TABLE no_cqntable`,
+
+    `CREATE TABLE no_cqntable (k NUMBER)`
+  ];
+
+  for (const s of stmts) {
+    try {
+      await connection.execute(s);
+    } catch(e) {
+      if (e.errorNum != 942)
+        console.error(e);
+    }
+  }
+}
+
 async function runTest() {
-  let conn;
+  let connection;
 
   try {
-    conn = await oracledb.getConnection(dbConfig);
+    connection = await oracledb.getConnection(dbConfig);
 
-    await conn.subscribe('mysub', options);
+    await setup(connection);
+
+    await connection.subscribe('mysub', options);
 
     console.log("Subscription created...");
 
@@ -98,9 +123,9 @@ async function runTest() {
     console.error(err);
     clearInterval(interval);
   } finally {
-    if (conn) {
+    if (connection) {
       try {
-        await conn.close();
+        await connection.close();
       } catch (err) {
         console.error(err);
       }

@@ -1,4 +1,4 @@
-/* Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved. */
+/* Copyright (c) 2015, 2019, Oracle and/or its affiliates. All rights reserved. */
 
 /******************************************************************************
  *
@@ -21,76 +21,67 @@
  * DESCRIPTION
  *   Executes a query and uses a ResultSet to fetch batches of rows
  *   with getRows().  Also shows setting the fetch array size.
- *   Uses Oracle's sample HR schema.
+ *
+ *   This example uses Node 8's async/await syntax.
  *
  *****************************************************************************/
 
-var oracledb = require('oracledb');
-var dbConfig = require('./dbconfig.js');
-
+const oracledb = require('oracledb');
+const dbConfig = require('./dbconfig.js');
+const demoSetup = require('./demosetup.js');
 
 // Number of rows to return from each call to getRows()
-var numRows = 10;
+const numRows = 2;
 
-oracledb.getConnection(
-  {
-    user          : dbConfig.user,
-    password      : dbConfig.password,
-    connectString : dbConfig.connectString
-  },
-  function(err, connection) {
-    if (err) { console.error(err.message); return; }
-    connection.execute(
-      `SELECT employee_id, last_name
-       FROM   employees
-       WHERE ROWNUM < 25
-       ORDER BY employee_id`,
+async function run() {
+  let connection;
+
+  try {
+    connection = await oracledb.getConnection(dbConfig);
+
+    await demoSetup.setupBf(connection);  // create the demo table
+
+    const result = await connection.execute(
+      `SELECT id, farmer
+       FROM no_banana_farmer
+       ORDER BY id`,
       [], // no bind variables
       {
-        resultSet: true        // return a ResultSet.  Default is false
-      },
-      function(err, result) {
-        if (err) {
-          console.error(err.message);
-          doRelease(connection);
-          return;
-        }
-        // console.log(result);
-        fetchRowsFromRS(connection, result.resultSet, numRows);
-      });
-  });
-
-function fetchRowsFromRS(connection, resultSet, numRows) {
-  resultSet.getRows(
-    numRows,  // get this many rows
-    function (err, rows) {
-      if (err) {
-        console.error(err);
-        doClose(connection, resultSet);   // always close the ResultSet
-      } else if (rows.length > 0) {
-        console.log("fetchRowsFromRS(): Got " + rows.length + " rows");
-        console.log(rows);
-        if (rows.length === numRows)      // might be more rows
-          fetchRowsFromRS(connection, resultSet, numRows);
-        else
-          doClose(connection, resultSet); // always close the ResultSet
-      } else { // no rows
-        doClose(connection, resultSet);   // always close the ResultSet
+        resultSet: true // return a ResultSet (default is false)
       }
-    });
+    );
+
+    // Fetch rows from the ResultSet.
+    //
+    // If getRows(numRows) returns:
+    //   Zero rows               => there were no rows, or are no more rows to return
+    //   Fewer than numRows rows => this was the last set of rows to get
+    //   Exactly numRows rows    => there may be more rows to fetch
+
+    const rs = result.resultSet;
+    let rows;
+
+    do {
+      rows = await rs.getRows(numRows); // get numRows rows at a time
+      if (rows.length > 0) {
+        console.log("getRows(): Got " + rows.length + " rows");
+        console.log(rows);
+      }
+    } while (rows.length === numRows);
+
+    // always close the ResultSet
+    await rs.close();
+  } catch (err) {
+    console.error(err);
+  } finally {
+    if (connection) {
+      try {
+        await connection.close();
+      } catch (err) {
+        console.error(err);
+      }
+    }
+  }
 }
 
-function doRelease(connection) {
-  connection.close(
-    function(err) {
-      if (err) { console.error(err.message); }
-    });
-}
-
-function doClose(connection, resultSet) {
-  resultSet.close(
-    function(err) {
-      if (err) { console.error(err.message); }
-      doRelease(connection);
-    });
-}
+run();

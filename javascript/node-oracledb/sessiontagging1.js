@@ -1,4 +1,4 @@
-/* Copyright (c) 2019, Oracle and/or its affiliates. All rights reserved. */
+/* Copyright (c) 2019, 2020, Oracle and/or its affiliates. All rights reserved. */
 
 /******************************************************************************
  *
@@ -38,12 +38,9 @@
  *   send 20 requests with a concurrency of 4:
  *     ab -n 20 -c 4 http://127.0.0.1:7000/
  *
- *   This file uses Node 8's async/await syntax but could be rewritten
- *   to use callbacks.
- *
  *   This example requires node-oracledb 3.1 or later.
  *
- *   Also see sessionfixup.js and sessiontagging2.js
+ *   This example uses Node 8's async/await syntax.
  *
  *****************************************************************************/
 
@@ -132,7 +129,7 @@ async function handleRequest(request, response) {
     //   will be invoked before getConnection() returns.  This lets
     //   the desired session state be set.
     connection = await oracledb.getConnection({poolAlias: 'default', tag: sessionTagNeeded /*, matchAnyTag: true */});
-    let result = await connection.execute(`SELECT TO_CHAR(CURRENT_DATE, 'DD-Mon-YYYY HH24:MI') FROM DUAL`);
+    const result = await connection.execute(`SELECT TO_CHAR(CURRENT_DATE, 'DD-Mon-YYYY HH24:MI') FROM DUAL`);
     console.log( `getConnection() tag needed was ${sessionTagNeeded}\n  ${result.rows[0][0]}`);
   } catch (err) {
     console.error(err.message);
@@ -154,7 +151,9 @@ async function closePoolAndExit() {
   try {
     // Get the 'default' pool from the pool cache and close it (force
     // closed after 3 seconds).
-    // If this hangs, you may need DISABLE_OOB=ON in a sqlnet.ora file
+    // If this hangs, you may need DISABLE_OOB=ON in a sqlnet.ora file.
+    // This setting should not be needed if both Oracle Client and Oracle
+    // Database are 19c (or later).
     await oracledb.getPool().close(3);
     process.exit(0);
   } catch(err) {

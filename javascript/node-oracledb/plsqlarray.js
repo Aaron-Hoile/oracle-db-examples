@@ -25,124 +25,163 @@
  *   that table and returns the values.  The third procedure accepts
  *   arrays, and returns the values sorted by the beach name.
  *
- *   Use demo.sql to create the required tables and package.
- *
  *   This example requires node-oracledb 1.6 or later.
+ *
+ *   This example uses Node 8's async/await syntax.
  *
  *****************************************************************************/
 
-var async = require('async');
-var oracledb = require('oracledb');
-var dbConfig = require('./dbconfig.js');
+const oracledb = require('oracledb');
+const dbConfig = require('./dbconfig.js');
 
-var doconnect = function(cb) {
-  oracledb.getConnection(dbConfig, cb);
-};
+async function run() {
 
-var dorelease = function(conn) {
-  conn.close(function (err) {
-    if (err)
-      console.error(err.message);
-  });
-};
+  let connection;
 
-var dorollback = function(conn, cb) {
-  conn.rollback(function (err) {
-    if (err)
-      return cb(err, conn);
-    else
-      return cb(null, conn);
-  });
-};
+  try {
+    connection = await oracledb.getConnection(dbConfig);
 
-// PL/SQL array bind IN parameters:
-//   Pass arrays of values to a PL/SQL procedure
-var doin = function (conn, cb) {
-  conn.execute(
-    "BEGIN beachpkg.array_in(:beach_in, :depth_in); END;",
-    {
-      beach_in:
-      { type : oracledb.STRING,
-        dir: oracledb.BIND_IN,
-        val: ["Malibu Beach", "Bondi Beach", "Waikiki Beach"] },
-      depth_in:
-      { type : oracledb.NUMBER,
-        dir: oracledb.BIND_IN,
-        val: [45, 30, 67] }
-    },
-    function(err) {
-      if (err) {
-        return cb(err, conn);
-      } else {
-        return cb(null, conn);
+    //
+    // Create table and package
+    //
+
+    const stmts = [
+      `DROP TABLE no_waveheight`,
+
+      `CREATE TABLE no_waveheight (beach VARCHAR2(50), depth NUMBER)`,
+
+      `CREATE OR REPLACE PACKAGE no_beachpkg IS
+         TYPE beachType IS TABLE OF VARCHAR2(30) INDEX BY BINARY_INTEGER;
+         TYPE depthType IS TABLE OF NUMBER       INDEX BY BINARY_INTEGER;
+         PROCEDURE array_in(beaches IN beachType, depths IN depthType);
+         PROCEDURE array_out(beaches OUT beachType, depths OUT depthType);
+         PROCEDURE array_inout(beaches IN OUT beachType, depths IN OUT depthType);
+       END;`,
+
+      `CREATE OR REPLACE PACKAGE BODY no_beachpkg IS
+
+         -- Insert array values into a table
+         PROCEDURE array_in(beaches IN beachType, depths IN depthType) IS
+         BEGIN
+           IF beaches.COUNT <> depths.COUNT THEN
+              RAISE_APPLICATION_ERROR(-20000, 'Array lengths must match for this example.');
+           END IF;
+           FORALL i IN INDICES OF beaches
+             INSERT INTO no_waveheight (beach, depth) VALUES (beaches(i), depths(i));
+         END;
+
+         -- Return the values from a table
+         PROCEDURE array_out(beaches OUT beachType, depths OUT depthType) IS
+         BEGIN
+           SELECT beach, depth BULK COLLECT INTO beaches, depths FROM no_waveheight;
+         END;
+
+         -- Return the arguments sorted
+         PROCEDURE array_inout(beaches IN OUT beachType, depths IN OUT depthType) IS
+         BEGIN
+           IF beaches.COUNT <> depths.COUNT THEN
+              RAISE_APPLICATION_ERROR(-20001, 'Array lengths must match for this example.');
+           END IF;
+           FORALL i IN INDICES OF beaches
+             INSERT INTO no_waveheight (beach, depth) VALUES (beaches(i), depths(i));
+           SELECT beach, depth BULK COLLECT INTO beaches, depths FROM no_waveheight ORDER BY 1;
+         END;
+
+        END;`
+    ];
+
+    for (const s of stmts) {
+      try {
+        await connection.execute(s);
+      } catch(e) {
+        if (e.errorNum != 942)
+          console.error(e);
       }
-    });
-};
+    }
 
-// PL/SQL array bind OUT parameters:
-//    Fetch arrays of values from a PL/SQL procedure
-var doout = function (conn, cb) {
-  conn.execute(
-    "BEGIN beachpkg.array_out(:beach_out, :depth_out); END;",
-    {
-      beach_out:
-      { type: oracledb.STRING,
-        dir: oracledb.BIND_OUT,
-        maxArraySize: 3 },
-      depth_out:
-      { type: oracledb.NUMBER,
-        dir: oracledb.BIND_OUT,
-        maxArraySize: 3 }
-    },
-    function (err, result) {
-      if (err) {
-        return cb(err, conn);
-      } else {
-        console.log("Binds returned:");
-        console.log(result.outBinds);
-        return cb(null, conn);
+    let result;
+
+    //
+    // PL/SQL array bind IN parameters:
+    // Pass arrays of values to a PL/SQL procedure
+    //
+
+    await connection.execute(
+      `BEGIN
+         no_beachpkg.array_in(:beach_in, :depth_in);
+       END;`,
+      {
+        beach_in:
+        { type : oracledb.STRING,
+          dir: oracledb.BIND_IN,
+          val: ["Malibu Beach", "Bondi Beach", "Waikiki Beach"] },
+        depth_in:
+        { type : oracledb.NUMBER,
+          dir: oracledb.BIND_IN,
+          val: [45, 30, 67] }
       }
-    });
-};
+    );
+    console.log('Data was bound in successfully');
 
-// PL/SQL array bind IN OUT parameters:
-//   Return input arrays sorted by beach name
-var doinout = function (conn, cb) {
-  conn.execute(
-    "BEGIN beachpkg.array_inout(:beach_inout, :depth_inout); END;",
-    {
-      beach_inout:
-      { type: oracledb.STRING,
-        dir: oracledb.BIND_INOUT,
-        val: ["Port Melbourne Beach", "Eighty Mile Beach", "Chesil Beach"],
-        maxArraySize: 3 },
-      depth_inout:
-      { type: oracledb.NUMBER,
-        dir: oracledb.BIND_INOUT,
-        val: [8, 3, 70],
-        maxArraySize: 3 }
-    },
-    function (err, result) {
-      if (err) {
-        return cb(err, conn);
-      } else {
-        console.log("Binds returned:");
-        console.log(result.outBinds);
-        return cb(null, conn);
+    //
+    // PL/SQL array bind OUT parameters:
+    // Fetch arrays of values from a PL/SQL procedure
+    //
+
+    result = await connection.execute(
+      `BEGIN
+         no_beachpkg.array_out(:beach_out, :depth_out);
+       END;`,
+      {
+        beach_out:
+        { type: oracledb.STRING,
+          dir: oracledb.BIND_OUT,
+          maxArraySize: 3 },
+        depth_out:
+        { type: oracledb.NUMBER,
+          dir: oracledb.BIND_OUT,
+          maxArraySize: 3 }
       }
-    });
-};
+    );
+    console.log("Binds returned:");
+    console.log(result.outBinds);
 
-async.waterfall(
-  [
-    doconnect,
-    doin,
-    doout,
-    dorollback,
-    doinout
-  ],
-  function (err, conn) {
-    if (err) { console.error("In waterfall error cb: ==>", err, "<=="); }
-    if (conn)
-      dorelease(conn);
-  });
+    //
+    // PL/SQL array bind IN OUT parameters:
+    // Return input arrays sorted by beach name
+    //
+
+    result = await connection.execute(
+      `BEGIN
+         no_beachpkg.array_inout(:beach_inout, :depth_inout);
+       END;`,
+      {
+        beach_inout:
+        { type: oracledb.STRING,
+          dir: oracledb.BIND_INOUT,
+          val: ["Port Melbourne Beach", "Eighty Mile Beach", "Chesil Beach"],
+          maxArraySize: 6 },
+        depth_inout:
+        { type: oracledb.NUMBER,
+          dir: oracledb.BIND_INOUT,
+          val: [8, 3, 70],
+          maxArraySize: 6 }
+      }
+    );
+    console.log("Binds returned:");
+    console.log(result.outBinds);
+
+  } catch (err) {
+    console.error(err);
+  } finally {
+    if (connection) {
+      try {
+        await connection.close();
+      } catch (err) {
+        console.error(err);
+      }
+    }
+  }
+}
+
+run();

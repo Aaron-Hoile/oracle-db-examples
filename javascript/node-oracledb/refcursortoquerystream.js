@@ -1,4 +1,4 @@
-/* Copyright (c) 2016, 2019, Oracle and/or its affiliates. All rights reserved. */
+/* Copyright (c) 2016, 2020, Oracle and/or its affiliates. All rights reserved. */
 
 /******************************************************************************
  *
@@ -19,74 +19,70 @@
  *   refcursortoquerystream.js
  *
  * DESCRIPTION
- *   Converts a refcursor (returned from execute) to a query stream for an
- *   alternative means of processing instead of using resultSet.getRows().
- *
- *   Scripts to create the HR schema can be found at:
- *   https://github.com/oracle/db-sample-schemas
+ *   Converts a refcursor returned from execute() to a query stream.
+ *   This is an alternative means of processing instead of using
+ *   resultSet.getRows().
  *
  *   This example requires node-oracledb 1.9 or later.
  *
+ *   This example uses Node 8's async/await syntax.
+ *
  *****************************************************************************/
 
-var oracledb = require('oracledb');
-var dbConfig = require('./dbconfig.js');
+const oracledb = require('oracledb');
+const dbConfig = require('./dbconfig.js');
+const demoSetup = require('./demosetup.js');
 
-oracledb.getConnection(
-  {
-    user          : dbConfig.user,
-    password      : dbConfig.password,
-    connectString : dbConfig.connectString
-  },
-  function(err, connection) {
-    if (err) {
-      console.error(err.message);
-      return;
-    }
+async function run() {
+  let connection;
 
-    connection.execute(
+  try {
+    connection = await oracledb.getConnection(dbConfig);
+
+    await demoSetup.setupBf(connection);  // create the demo table
+
+    const result = await connection.execute(
       `BEGIN
-         OPEN :cursor FOR SELECT department_id, department_name FROM departments;
+         OPEN :cursor FOR
+           SELECT id, farmer
+           FROM no_banana_farmer
+           ORDER BY id;
        END;`,
       {
-        cursor:  { type: oracledb.CURSOR, dir : oracledb.BIND_OUT }
-      },
-      function(err, result) {
-        var cursor;
-        var queryStream;
-
-        if (err) {
-          console.error(err.message);
-          doRelease(connection);
-          return;
+        cursor: {
+          type: oracledb.CURSOR,
+          dir: oracledb.BIND_OUT
         }
-
-        cursor = result.outBinds.cursor;
-        queryStream = cursor.toQueryStream();
-
-        queryStream.on('data', function (row) {
-          console.log(row);
-        });
-
-        queryStream.on('error', function (err) {
-          console.error(err.message);
-          doRelease(connection);
-        });
-
-        queryStream.on('close', function () {
-          doRelease(connection);
-        });
       }
     );
-  }
-);
 
-function doRelease(connection) {
-  connection.close(
-    function(err) {
-      if (err) {
-        console.error(err.message);
+    const cursor = result.outBinds.cursor;
+    const queryStream = cursor.toQueryStream();
+
+    const consumeStream = new Promise((resolve, reject) => {
+      queryStream.on('data', function(row) {
+        console.log(row);
+      });
+      queryStream.on('error', reject);
+      queryStream.on('end', function() {
+        queryStream.destroy(); // free up resources
+      });
+      queryStream.on('close', resolve);
+    });
+
+    await consumeStream;
+
+  } catch (err) {
+    console.error(err);
+  } finally {
+    if (connection) {
+      try {
+        await connection.close();
+      } catch (err) {
+        console.error(err);
       }
     }
-  );
+  }
 }
+
+run();

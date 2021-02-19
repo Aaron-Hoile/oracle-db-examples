@@ -1,4 +1,4 @@
-/* Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved. */
+/* Copyright (c) 2015, 2019, Oracle and/or its affiliates. All rights reserved. */
 
 /******************************************************************************
  *
@@ -22,80 +22,89 @@
  *   Shows using a ResultSet to fetch rows from a REF CURSOR using getRows().
  *   Streaming is also possible (this is not shown).
  *
- *   Uses Oracle's sample HR schema.
- *   Use demo.sql to create the required procedure or do:
- *
- *  CREATE OR REPLACE PROCEDURE get_emp_rs (p_sal IN NUMBER, p_recordset OUT SYS_REFCURSOR)
- *  AS
- *  BEGIN
- *    OPEN p_recordset FOR
- *      SELECT first_name, salary, hire_date
- *      FROM   employees
- *      WHERE  salary > p_sal;
- *  END;
- *  /
+ *   This example uses Node 8's async/await syntax.
  *
  *****************************************************************************/
 
-var oracledb = require('oracledb');
-var dbConfig = require('./dbconfig.js');
+const oracledb = require('oracledb');
+const dbConfig = require('./dbconfig.js');
+const demoSetup = require('./demosetup.js');
 
-var numRows = 10;  // number of rows to return from each call to getRows()
+const numRows = 10;  // number of rows to return from each call to getRows()
 
-oracledb.getConnection(
-  {
-    user          : dbConfig.user,
-    password      : dbConfig.password,
-    connectString : dbConfig.connectString
-  },
-  function(err, connection) {
-    if (err) { console.error(err.message); return; }
-    var bindvars = {
-      sal:  12000,
-      cursor:  { type: oracledb.CURSOR, dir : oracledb.BIND_OUT }
-    };
-    connection.execute(
-      "BEGIN get_emp_rs(:sal, :cursor); END;",
-      bindvars,
-      function(err, result) {
-        if (err) {
-          console.error(err.message);
-          doRelease(connection);
-          return;
-        }
-        console.log(result.outBinds.cursor.metaData);
-        fetchRowsFromRS(connection, result.outBinds.cursor, numRows);
+async function run() {
+
+  let connection;
+
+  try {
+    connection = await oracledb.getConnection(dbConfig);
+
+    await demoSetup.setupBf(connection);  // create the demo table
+
+    //
+    // Create a PL/SQL procedure
+    //
+
+    await connection.execute(
+      `CREATE OR REPLACE PROCEDURE no_get_rs (p_id IN NUMBER, p_recordset OUT SYS_REFCURSOR)
+       AS
+       BEGIN
+         OPEN p_recordset FOR
+           SELECT farmer, weight, ripeness
+           FROM   no_banana_farmer
+           WHERE  id < p_id;
+       END;`
+    );
+
+    //
+    // Get a REF CURSOR result set
+    //
+
+    const result = await connection.execute(
+      `BEGIN
+         no_get_rs(:id, :cursor);
+       END;`,
+      {
+        id:     3,
+        cursor: { type: oracledb.CURSOR, dir: oracledb.BIND_OUT }
       });
-  });
 
-function fetchRowsFromRS(connection, resultSet, numRows) {
-  resultSet.getRows( // get numRows rows
-    numRows,
-    function (err, rows) {
-      if (err) {
-        console.log(err);
-        doClose(connection, resultSet); // always close the ResultSet
-      } else if (rows.length === 0) {   // no rows, or no more rows
-        doClose(connection, resultSet); // always close the ResultSet
-      } else if (rows.length > 0) {
-        console.log("fetchRowsFromRS(): Got " + rows.length + " rows");
+    console.log("Cursor metadata:");
+    console.log(result.outBinds.cursor.metaData);
+
+    //
+    // Fetch rows from the REF CURSOR.
+    //
+    //
+    // If getRows(numRows) returns:
+    //   Zero rows               => there were no rows, or are no more rows to return
+    //   Fewer than numRows rows => this was the last set of rows to get
+    //   Exactly numRows rows    => there may be more rows to fetch
+
+    const resultSet = result.outBinds.cursor;
+    let rows;
+    do {
+      rows = await resultSet.getRows(numRows); // get numRows rows at a time
+      if (rows.length > 0) {
+        console.log("getRows(): Got " + rows.length + " rows");
         console.log(rows);
-        fetchRowsFromRS(connection, resultSet, numRows);
       }
-    });
+    } while (rows.length === numRows);
+
+    // always close the ResultSet
+    await resultSet.close();
+
+  } catch (err) {
+    console.error(err);
+  } finally {
+    if (connection) {
+      try {
+        await connection.close();
+      } catch (err) {
+        console.error(err);
+      }
+    }
+  }
 }
 
-function doRelease(connection) {
-  connection.close(
-    function(err) {
-      if (err) { console.error(err.message); }
-    });
-}
-
-function doClose(connection, resultSet) {
-  resultSet.close(
-    function(err) {
-      if (err) { console.error(err.message); }
-      doRelease(connection);
-    });
-}
+run();

@@ -1,4 +1,4 @@
-/* Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved. */
+/* Copyright (c) 2015, 2019, Oracle and/or its affiliates. All rights reserved. */
 
 /******************************************************************************
  *
@@ -19,24 +19,25 @@
  *   endtoend.js
  *
  * DESCRIPTION
- *   Show setting connection metadata for end-to-end tracing and client authorization.
- *   While the script sleeps (keeping the connection open), use SQL*Plus as SYSTEM to execute:
+ *   Sets connection metadata for end-to-end tracing and client authorization.
+ *
+ *   While the script sleeps (keeping the connection open), use SQL*Plus as a privileged user to execute:
  *      SELECT username, client_identifier, action, module FROM v$session WHERE username IS NOT NULL;
  *   The end-to-end tracing attributes are shown in various other DBA views and in Enterprise Manager.
  *
+ *   This example uses Node 8's async/await syntax.
+ *
  *****************************************************************************/
 
-var oracledb = require('oracledb');
-var dbConfig = require('./dbconfig.js');
+const oracledb = require('oracledb');
+const dbConfig = require('./dbconfig.js');
 
-oracledb.getConnection(
-  {
-    user          : dbConfig.user,
-    password      : dbConfig.password,
-    connectString : dbConfig.connectString
-  },
-  function(err, connection) {
-    if (err) { console.error(err.message); return;    }
+async function run() {
+
+  let connection;
+
+  try {
+    connection = await oracledb.getConnection(dbConfig);
 
     // These end-to-end tracing attributes are sent to the database on
     // the next 'round trip' i.e. with execute()
@@ -44,27 +45,35 @@ oracledb.getConnection(
     connection.module = "End-to-end example";
     connection.action = "Query departments";
 
-    connection.execute("SELECT * FROM dual",
-      function(err, result) {
-        if (err) { doRelease(connection); console.error(err.message); return; }
-        console.log(result.rows);
-        // Sleep 10 seconds to keep the connection open.  This allows
-        // external queries on V$SESSION to show the connection
-        // attributes.
-        console.log("Use SQL*Plus as SYSTEM to execute:");
-        console.log("SELECT username, client_identifier, action, module FROM v$session WHERE username = UPPER('" + dbConfig.user +"');");
-        setTimeout(function() {
-          doRelease(connection);
-        }, 10000);
-      });
+    console.log("Use SQL*Plus as SYSTEM (or ADMIN for Oracle Cloud databases) to execute the query:");
+    console.log("  SELECT username, client_identifier, action, module FROM v$session WHERE username = UPPER('" + dbConfig.user +"');");
+
+    // Sleep 10 seconds to keep the connection open.  This allows
+    // external queries on V$SESSION to show the connection
+    // attributes before the connection is closed.
+    await connection.execute(`BEGIN DBMS_SESSION.SLEEP(10); END;`);
+
+  } catch (err) {
+    console.error(err);
+  } finally {
+    if (connection) {
+      try {
+        await connection.close();
+      } catch (err) {
+        console.error(err);
+      }
+    }
+  }
+}
+
+process
+  .on('SIGTERM', function() {
+    console.log("\nTerminating");
+    process.exit(0);
+  })
+  .on('SIGINT', function() {
+    console.log("\nTerminating");
+    process.exit(0);
   });
 
-// Release the connection
-function doRelease(connection) {
-  connection.close(
-    function(err) {
-      if (err) {
-        console.error(err.message);
-      }
-    });
-}
+run();

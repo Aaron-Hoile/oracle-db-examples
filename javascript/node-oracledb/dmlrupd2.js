@@ -1,4 +1,4 @@
-/* Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved. */
+/* Copyright (c) 2015, 2019, Oracle and/or its affiliates. All rights reserved. */
 
 /******************************************************************************
  *
@@ -22,34 +22,58 @@
  *   Example of 'DML Returning' with multiple rows matched.
  *   The ROWIDs of the changed records are returned.  This is how to get
  *   the 'last insert id'.
- *   Bind names cannot be reused in the DML section and the RETURNING section.
  *
- *   Use demo.sql to create the required table or do:
- *     DROP TABLE dmlrupdtab;
- *     CREATE TABLE dmlrupdtab (id NUMBER, name VARCHAR2(40));
- *     INSERT INTO dmlrupdtab VALUES (1001, 'Venkat');
- *     INSERT INTO dmlrupdtab VALUES (1002, 'Neeharika');
- *     COMMIT;
+ *   This example uses Node 8's async/await syntax.
  *
  *****************************************************************************/
 
-var oracledb = require( 'oracledb' );
-var dbConfig = require('./dbconfig.js');
+const oracledb = require( 'oracledb' );
+const dbConfig = require('./dbconfig.js');
 
-oracledb.getConnection(
-  {
-    user          : dbConfig.user,
-    password      : dbConfig.password,
-    connectString : dbConfig.connectString
-  },
-  function(err, connection) {
-    if (err) {
-      console.error(err);
-      return;
+async function run() {
+
+  let connection;
+
+  try {
+    connection = await oracledb.getConnection(dbConfig);
+
+    //
+    // Setup
+    //
+
+    const stmts = [
+      `DROP TABLE no_dmlrupdtab`,
+
+      `CREATE TABLE no_dmlrupdtab (id NUMBER, name VARCHAR2(40))`,
+
+      `INSERT INTO no_dmlrupdtab VALUES (1001, 'Venkat')`,
+
+      `INSERT INTO no_dmlrupdtab VALUES (1002, 'Neeharika')`
+    ];
+
+    for (const s of stmts) {
+      try {
+        await connection.execute(s);
+      } catch(e) {
+        if (e.errorNum != 942)
+          console.error(e);
+      }
     }
 
-    connection.execute(
-      "UPDATE dmlrupdtab SET name = :name WHERE id IN (:id1, :id2) RETURNING id, ROWID INTO :ids, :rids",
+    //
+    // Show DML Returning
+    //
+
+    // SQL statement.
+    // Note bind names cannot be reused in the DML section and the RETURNING section
+    const sql =
+          `UPDATE no_dmlrupdtab
+           SET name = :name
+           WHERE id IN (:id1, :id2)
+           RETURNING id, ROWID INTO :ids, :rids`;
+
+    const result = await connection.execute(
+      sql,
       {
         id1:   1001,
         id2:   1002,
@@ -57,12 +81,22 @@ oracledb.getConnection(
         ids:   { type: oracledb.NUMBER, dir: oracledb.BIND_OUT },
         rids:  { type: oracledb.STRING, dir: oracledb.BIND_OUT }
       },
-      { autoCommit: true },
-      function(err, result) {
-        if (err) {
-          console.error(err);
-          return;
-        }
-        console.log(result.outBinds);
-      });
-  });
+      { autoCommit: true }
+    );
+
+    console.log(result.outBinds);
+
+  } catch (err) {
+    console.error(err);
+  } finally {
+    if (connection) {
+      try {
+        await connection.close();
+      } catch (err) {
+        console.error(err);
+      }
+    }
+  }
+}
+
+run();

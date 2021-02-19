@@ -1,4 +1,4 @@
-/* Copyright (c) 2015, 2019, Oracle and/or its affiliates. All rights reserved. */
+/* Copyright (c) 2015, 2020, Oracle and/or its affiliates. All rights reserved. */
 
 /******************************************************************************
  *
@@ -23,91 +23,86 @@
  *
  *   For smaller LOBs you will probably prefer the method shown in lobinsert1.js
  *
- *   Create clobexample.txt before running this example.
- *   Use demo.sql to create the required table or do:
- *     DROP TABLE mylobs;
- *     CREATE TABLE mylobs (id NUMBER, c CLOB, b BLOB);
- *
  *   This example requires node-oracledb 1.12 or later.
  *
  *****************************************************************************/
 
-var fs = require('fs');
-var oracledb = require('oracledb');
-var dbConfig = require('./dbconfig.js');
+const fs = require('fs');
+const oracledb = require('oracledb');
+const dbConfig = require('./dbconfig.js');
+const demoSetup = require('./demosetup.js');
 
-var inFileName = 'clobexample.txt';  // the file with text to be inserted into the database
+const inFileName = 'clobexample.txt';  // the file with text to be inserted into the database
 
-oracledb.getConnection(
-  {
-    user          : dbConfig.user,
-    password      : dbConfig.password,
-    connectString : dbConfig.connectString
-  },
-  function(err, connection) {
-    if (err) { console.error(err.message); return; }
+async function run() {
 
-    connection.execute(
-      "INSERT INTO mylobs (id, c) VALUES (:id, EMPTY_CLOB()) RETURNING c INTO :lobbv",
-      { id: 4, lobbv: {type: oracledb.CLOB, dir: oracledb.BIND_OUT} },
-      { autoCommit: false },  // a transaction needs to span the INSERT and pipe()
-      function(err, result) {
-        if (err) { console.error(err.message); return; }
-        if (result.rowsAffected != 1 || result.outBinds.lobbv.length != 1) {
-          console.error('Error getting a LOB locator');
-          return;
-        }
+  let connection;
 
-        var errorHandled = false;
+  try {
+    const connection = await oracledb.getConnection(dbConfig);
 
-        var lob = result.outBinds.lobbv[0];
-        lob.on(
-          'close',
-          function() {
-            console.log("lob.on 'close' event");
-            connection.commit(
-              function(err) {
-                if (!errorHandled) {
-                  errorHandled = true;
-                  if (err) {
-                    console.error(err);
-                  } else {
-                    console.log("Text inserted successfully.");
-                  }
-                  connection.close(function(err) {
-                    if (err)
-                      console.error(err);
-                  });
-                }
-              });
-          });
-        lob.on(
-          'error',
-          function(err) {
-            console.log("lob.on 'error' event");
-            if (!errorHandled) {
-              errorHandled = true;
-              console.error(err);
-              lob.close(function(err) {
-                if (err) {
-                  console.error(err.message);
-                }
-              });
-            }
-          });
+    await demoSetup.setupLobs(connection);  // create the demo table
 
-        console.log('Reading from ' + inFileName);
-        var inStream = fs.createReadStream(inFileName);
-        inStream.on(
-          'error',
-          function(err) {
-            console.log("inStream.on 'error' event");
-            if (!errorHandled) {
-              errorHandled = true;
-              console.error(err);
-            }
-          });
+    const result = await connection.execute(
+      `INSERT INTO no_lobs (id, c) VALUES (:id, EMPTY_CLOB()) RETURNING c INTO :lobbv`,
+      {
+        id: 4,
+        lobbv: {type: oracledb.CLOB, dir: oracledb.BIND_OUT}
+      },
+      { autoCommit: false }  // a transaction needs to span the INSERT and pipe()
+    );
 
-        inStream.pipe(lob);  // copies the text to the LOB
+    if (result.rowsAffected != 1 || result.outBinds.lobbv.length != 1) {
+      throw new Error('Error getting a LOB locator');
+    }
+
+    const lob = result.outBinds.lobbv[0];
+    if (lob === null) {
+      throw new Error('NULL lob found');
+    }
+
+    const doStream = new Promise((resolve, reject) => {
+
+      lob.on('finish', () => {
+        // console.log("lob.on 'finish' event");
+        connection.commit((err) => {
+          if (err) {
+            lob.destroy(err);
+          } else {
+            console.log("Text inserted successfully.");
+            resolve();
+          }
+        });
       });
-  });
+
+      lob.on('error', (err) => {
+        // console.log("lob.on 'error' event");
+        reject(err);
+      });
+
+      console.log('Reading from ' + inFileName);
+      const inStream = fs.createReadStream(inFileName);
+      inStream.on('error', (err) => {
+        // console.log("inStream.on 'error' event");
+        lob.destroy(err);
+      });
+
+      inStream.pipe(lob);  // copies the text to the LOB
+    });
+
+    await doStream;
+
+  } catch (err) {
+    console.error(err);
+  } finally {
+    if (connection) {
+      try {
+        await connection.close();
+      } catch (err) {
+        console.error(err);
+      }
+    }
+  }
+}
+
+run();
